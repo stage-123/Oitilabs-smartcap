@@ -1,0 +1,7 @@
+{
+  "name": "Captura Inteligente de Documentos",
+  "description": "Uma aplicação de captura inteligente de documentos que detecta e captura automaticamente imagens de documentos usando a câmera do dispositivo.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

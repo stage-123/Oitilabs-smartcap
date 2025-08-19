@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
 import { CaptureStep, AppState, DetectedObject, CapturedImage, AnalysisResult, FraudResult } from './types';
-import { CAPTURE_STEPS, CENTER_THRESHOLD, DETECTION_CONFIDENCE_THRESHOLD, FRAME_AREA_THRESHOLD, TARGET_CLASSES } from './constants';
+import { CAPTURE_STEPS, CENTER_THRESHOLD, DETECTION_CONFIDENCE_THRESHOLD, FRAME_AREA_THRESHOLD, TARGET_CLASSES, SHARPNESS_THRESHOLD } from './constants';
 import CameraCapture from './components/CameraCapture';
 import StepIndicator from './components/StepIndicator';
 import { ArrowLeftIcon, CameraIcon, CheckCircleIcon, RefreshIcon, ArrowRightIcon, LoadingSpinnerIcon, XCircleIcon, UploadCloudIcon } from './components/Icon';
@@ -128,6 +128,35 @@ const cropImage = (imageDataUrl: string, bbox: [number, number, number, number])
         img.onerror = reject;
     });
 };
+
+const calculateSharpness = (imageData: ImageData): number => {
+    const { width, height, data } = imageData;
+    const gray = new Uint8Array(width * height);
+    for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+        gray[j] = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+    }
+
+    let laplacianSum = 0;
+    let pixelCount = 0;
+
+    for (let y = 1; y < height - 1; y++) {
+        for (let x = 1; x < width - 1; x++) {
+            const center = gray[y * width + x];
+            const top = gray[(y - 1) * width + x];
+            const bottom = gray[(y + 1) * width + x];
+            const left = gray[y * width + (x - 1)];
+            const right = gray[y * width + (x + 1)];
+            
+            const laplacianValue = 4 * center - (top + bottom + left + right);
+            laplacianSum += laplacianValue * laplacianValue;
+            pixelCount++;
+        }
+    }
+    
+    if (pixelCount === 0) return 0;
+    return laplacianSum / pixelCount;
+};
+
 
 const App: React.FC = () => {
   // --- STATE HOOKS ---
@@ -359,6 +388,7 @@ const App: React.FC = () => {
         const image = new Image();
         image.src = imageDataUrl;
         image.onload = async () => {
+            // Etapa 1: Detectar o documento primeiro
             const predictions = await model.detect(image);
             const validPrediction = predictions.find(p => TARGET_CLASSES.includes(p.class) && p.score > DETECTION_CONFIDENCE_THRESHOLD);
             
@@ -369,7 +399,26 @@ const App: React.FC = () => {
 
             const { bbox } = validPrediction as DetectedObject;
             const [x, y, width, height] = bbox;
-            
+
+            // Etapa 2: Verificar a nitidez na caixa delimitadora detectada
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                resolve({ valid: false, message: "Não foi possível processar a imagem.", bbox: null });
+                return;
+            }
+            ctx.drawImage(image, x, y, width, height, 0, 0, width, height);
+            const imageData = ctx.getImageData(0, 0, width, height);
+            const sharpness = calculateSharpness(imageData);
+
+            if (sharpness < SHARPNESS_THRESHOLD) {
+                resolve({ valid: false, message: "A imagem parece embaçada. Por favor, envie uma imagem mais nítida.", bbox: null });
+                return;
+            }
+
+            // Etapa 3: Verificar outras propriedades geométricas (tamanho, centralização)
             const bboxCenterX = x + width / 2;
             const bboxCenterY = y + height / 2;
             const imageCenterX = image.width / 2;
@@ -447,7 +496,6 @@ const App: React.FC = () => {
         return (
           <CameraCapture
             onCapture={handleCapture}
-            guidanceText={currentStep.guidance}
             model={model}
             isLoading={isModelLoading}
           />
@@ -529,7 +577,7 @@ const App: React.FC = () => {
     <div className="min-h-screen w-screen bg-slate-100 flex flex-col font-sans">
         <header className="bg-sky-400 p-6 sm:p-12 text-white text-center">
             <OitiLogo />
-            <h1 className="text-3xl sm:text-4xl font-bold mt-4 max-w-2xl mx-auto">A solução ideal para identificar e cadastrar seus clientes.</h1>
+            <h1 className="text-3xl sm:text-4xl font-bold mt-4 max-w-2xl mx-auto">OitiLabs - SmartCap</h1>
         </header>
       
         <main className="relative -mt-8 sm:-mt-12 z-10 p-4 flex-1">
